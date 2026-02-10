@@ -1,0 +1,115 @@
+version: '3.2'
+
+services:
+    # PHP + Laravel приложение
+    app:
+        build:
+            context: ./docker/php
+            dockerfile: Dockerfile
+        container_name: laravel-app
+        volumes:
+            - ./:/var/www/html
+        user: "1000:1000"
+        working_dir: /var/www/html
+        depends_on:
+            - postgres
+        networks:
+            - laravel-network
+
+    # Web сервер (Nginx)
+    nginx:
+        image: nginx:alpine
+        container_name: laravel-nginx
+        ports:
+            - "8000:80"
+        volumes:
+            - ./:/var/www/html
+            - ./docker/nginx/conf.d:/etc/nginx/conf.d
+        depends_on:
+            - app
+        networks:
+            - laravel-network
+
+  # PostgreSQL (основная БД)
+    postgres:
+      image: postgres:16
+      container_name: laravel-postgres
+      restart: always
+      environment:
+        POSTGRES_USER: root
+        POSTGRES_PASSWORD: password
+        POSTGRES_DB: laravel
+      ports:
+        - "5432:5432"
+      volumes:
+        - postgres_data_main:/var/lib/postgresql/data
+      networks:
+        - laravel-network
+
+  # PostgreSQL (тестовая БД)
+    postgres-test:
+      image: postgres:16
+      container_name: laravel-postgres-test
+      restart: always
+      environment:
+        POSTGRES_USER: test
+        POSTGRES_PASSWORD: password
+        POSTGRES_DB: laravel
+      ports:
+        - "5433:5432"
+      volumes:
+        - postgres_data_test:/var/lib/postgresql/data
+      networks:
+        - laravel-network
+
+  # pgAdmin 4 (веб-интерфейс для PostgreSQL)
+    pgadmin:
+      image: dpage/pgadmin4
+      container_name: pgadmin
+      restart: always
+      environment:
+        PGADMIN_DEFAULT_EMAIL: admin@admin.com
+        PGADMIN_DEFAULT_PASSWORD: admin
+      ports:
+        - "8081:80"
+      depends_on:
+        - postgres
+      networks:
+        - laravel-network
+      volumes:
+        - pgadmin_data:/var/lib/pgadmin
+
+    redis:
+        image: redis:latest
+        restart: always
+        volumes:
+            - ./storage/redis/data:/data
+        ports:
+            - "10004:6379"
+        networks:
+            - laravel-network
+
+    reverb:
+      build:
+        context: ./docker/php
+        dockerfile: Dockerfile
+      container_name: laravel-reverb
+      command: php artisan reverb:start --host=0.0.0.0 --port=8080 --no-interaction
+      volumes:
+        - ./:/var/www/html
+      working_dir: /var/www/html
+      depends_on:
+        - app
+        - redis
+      ports:
+        - "8080:8080"
+      networks:
+        - laravel-network
+volumes:
+  postgres_data_main:
+  postgres_data_test:
+  pgadmin_data:
+
+networks:
+  laravel-network:
+    driver: bridge
