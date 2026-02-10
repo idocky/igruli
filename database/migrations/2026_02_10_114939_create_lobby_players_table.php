@@ -13,6 +13,11 @@ return new class extends Migration
     {
         Schema::create('lobby_players', function (Blueprint $table) {
             $table->id();
+            $table->string('username');
+            $table->foreignId('user_id')->nullable()->constrained('users');
+            $table->string('guest_id');
+            $table->integer('team');
+            $table->foreignId('lobby_id')->constrained('lobbies');
             $table->timestamps();
         });
     }

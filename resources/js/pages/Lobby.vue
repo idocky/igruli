@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { Head } from '@inertiajs/vue3';
+import { Head, useForm } from '@inertiajs/vue3';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { onUnmounted, ref } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 
@@ -12,6 +12,9 @@ interface LobbyData {
     id: number;
     title: string;
     code: string;
+    players: Player[];
+    createdBy: string | null;
+    canManagePlayers: boolean;
 }
 
 interface Player {
@@ -26,16 +29,29 @@ interface PresenceMember {
     team: number;
 }
 
+interface PlayerRemovedEvent {
+    userId: string;
+}
+
 const props = defineProps<{
     lobby: LobbyData;
+    currentPlayer: Player | null;
 }>();
 
-const nickname = ref('');
+const joinForm = useForm({
+    username: '',
+    team: 1,
+});
+
+const removeForm = useForm({
+    guest_id: '',
+});
+
 const isJoined = ref(false);
 const currentPlayer = ref<Player | null>(null);
-const team1Players = ref<Player[]>([]);
-const team2Players = ref<Player[]>([]);
-const isLoading = ref(false);
+const team1Players = ref<Player[]>(props.lobby.players.filter((p) => p.team === 1));
+const team2Players = ref<Player[]>(props.lobby.players.filter((p) => p.team === 2));
+const canManagePlayers = computed(() => props.lobby.canManagePlayers);
 
 let echo: Echo<'reverb'> | null = null;
 
@@ -55,15 +71,16 @@ function addPlayer(member: PresenceMember): void {
             team2Players.value.push(player);
         }
     }
+    console.log(1);
+}
+
+function removePlayerByUserId(userId: string): void {
+    team1Players.value = team1Players.value.filter((p) => p.userId !== userId);
+    team2Players.value = team2Players.value.filter((p) => p.userId !== userId);
 }
 
 function removePlayer(member: PresenceMember): void {
-    team1Players.value = team1Players.value.filter(
-        (p) => p.userId !== member.id,
-    );
-    team2Players.value = team2Players.value.filter(
-        (p) => p.userId !== member.id,
-    );
+    removePlayerByUserId(member.id);
 }
 
 function subscribePresence(): void {
@@ -75,15 +92,12 @@ function subscribePresence(): void {
         wsHost: import.meta.env.VITE_REVERB_HOST,
         wsPort: import.meta.env.VITE_REVERB_PORT ?? 80,
         wssPort: import.meta.env.VITE_REVERB_PORT ?? 443,
-        forceTLS:
-            (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
+        forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
         enabledTransports: ['ws', 'wss'],
     });
 
     echo.join(`lobby.${props.lobby.code}`)
         .here((members: PresenceMember[]) => {
-            team1Players.value = [];
-            team2Players.value = [];
             members.forEach((m) => addPlayer(m));
         })
         .joining((member: PresenceMember) => {
@@ -91,63 +105,64 @@ function subscribePresence(): void {
         })
         .leaving((member: PresenceMember) => {
             removePlayer(member);
+        })
+        .listen('.lobby.player-removed', (event: PlayerRemovedEvent) => {
+            removePlayerByUserId(event.userId);
         });
 }
 
-async function joinTeam(team: number): Promise<void> {
-    if (!nickname.value.trim() || isLoading.value) {
+function ensurePresenceSubscribed(): void {
+    if (echo) {
         return;
     }
 
-    isLoading.value = true;
-
-    try {
-        const csrfToken =
-            document
-                .querySelector<HTMLMetaElement>('meta[name="csrf-token"]')
-                ?.getAttribute('content') ?? '';
-
-        const xsrfToken = decodeURIComponent(
-            document.cookie
-                .split('; ')
-                .find((row) => row.startsWith('XSRF-TOKEN='))
-                ?.split('=')[1] ?? '',
-        );
-
-        const response = await fetch(`/lobby/${props.lobby.code}/join`, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                'X-CSRF-TOKEN': csrfToken,
-                'X-XSRF-TOKEN': xsrfToken,
-            },
-            body: JSON.stringify({
-                username: nickname.value.trim(),
-                team,
-            }),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            currentPlayer.value = {
-                userId: data.user_id,
-                username: data.username,
-                team: data.team,
-            };
-            isJoined.value = true;
-
-            // Subscribe to presence channel after server saved session
-            subscribePresence();
-        }
-    } finally {
-        isLoading.value = false;
-    }
+    subscribePresence();
 }
+
+function joinTeam(team: number): void {
+    if (!joinForm.username.trim() || joinForm.processing) {
+        return;
+    }
+
+    joinForm.team = team;
+
+    joinForm.post(`/lobby/${props.lobby.code}/join`, {
+        preserveScroll: true,
+    });
+}
+
+function kickPlayer(player: Player): void {
+    if (!canManagePlayers.value || removeForm.processing) {
+        return;
+    }
+
+    removePlayerByUserId(player.userId);
+    removeForm.guest_id = player.userId;
+
+    removeForm.delete(`/lobby/${props.lobby.code}/players`, {
+        preserveScroll: true,
+        onFinish: () => {
+            removeForm.reset();
+        },
+    });
+}
+
+watch(
+    () => props.currentPlayer,
+    (player) => {
+        currentPlayer.value = player;
+        isJoined.value = !!player;
+
+        if (player) {
+            ensurePresenceSubscribed();
+        }
+    },
+    { immediate: true },
+);
 
 onUnmounted(() => {
     echo?.leave(`lobby.${props.lobby.code}`);
+    echo = null;
 });
 </script>
 
@@ -159,9 +174,7 @@ onUnmounted(() => {
     >
         <div class="w-full max-w-4xl">
             <div class="mb-8 text-center">
-                <h1
-                    class="text-3xl font-bold tracking-tight text-foreground"
-                >
+                <h1 class="text-3xl font-bold tracking-tight text-foreground">
                     {{ lobby.title }}
                 </h1>
                 <div class="mt-2 flex items-center justify-center gap-2">
@@ -187,11 +200,20 @@ onUnmounted(() => {
                 </label>
                 <Input
                     id="nickname"
-                    v-model="nickname"
+                    v-model="joinForm.username"
                     placeholder="Никнейм"
                     class="text-center"
-                    @keyup.enter="nickname.trim() ? joinTeam(1) : undefined"
+                    :aria-invalid="!!joinForm.errors.username"
+                    @keyup.enter="
+                        joinForm.username.trim() ? joinTeam(1) : undefined
+                    "
                 />
+                <p
+                    v-if="joinForm.errors.username"
+                    class="text-sm text-destructive"
+                >
+                    {{ joinForm.errors.username }}
+                </p>
             </div>
 
             <!-- Joined badge -->
@@ -239,9 +261,7 @@ onUnmounted(() => {
                                     class="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/30 text-xs font-medium text-blue-700 dark:text-blue-300"
                                 >
                                     {{
-                                        player.username
-                                            .charAt(0)
-                                            .toUpperCase()
+                                        player.username.charAt(0).toUpperCase()
                                     }}
                                 </span>
                                 <span
@@ -263,6 +283,16 @@ onUnmounted(() => {
                                         (вы)
                                     </span>
                                 </span>
+                                <Button
+                                    v-if="canManagePlayers"
+                                    variant="destructive"
+                                    size="sm"
+                                    class="ml-auto h-8 px-2"
+                                    :disabled="removeForm.processing"
+                                    @click="kickPlayer(player)"
+                                >
+                                    Удалить
+                                </Button>
                             </li>
                         </ul>
                         <p
@@ -272,9 +302,9 @@ onUnmounted(() => {
                             Пока никого нет
                         </p>
                         <Button
-                            v-if="!isJoined && nickname.trim()"
+                            v-if="!isJoined && joinForm.username.trim()"
                             class="w-full bg-blue-600 text-white hover:bg-blue-700"
-                            :disabled="isLoading"
+                            :disabled="joinForm.processing"
                             @click="joinTeam(1)"
                         >
                             Присоединиться к Команде 1
@@ -283,9 +313,7 @@ onUnmounted(() => {
                 </Card>
 
                 <!-- Team 2 -->
-                <Card
-                    class="border-red-500/30 bg-red-500/5 dark:bg-red-500/10"
-                >
+                <Card class="border-red-500/30 bg-red-500/5 dark:bg-red-500/10">
                     <CardHeader class="border-b border-red-500/20">
                         <CardTitle
                             class="flex items-center gap-2 text-xl text-red-600 dark:text-red-400"
@@ -314,9 +342,7 @@ onUnmounted(() => {
                                     class="flex h-6 w-6 items-center justify-center rounded-full bg-red-500/30 text-xs font-medium text-red-700 dark:text-red-300"
                                 >
                                     {{
-                                        player.username
-                                            .charAt(0)
-                                            .toUpperCase()
+                                        player.username.charAt(0).toUpperCase()
                                     }}
                                 </span>
                                 <span
@@ -338,6 +364,16 @@ onUnmounted(() => {
                                         (вы)
                                     </span>
                                 </span>
+                                <Button
+                                    v-if="canManagePlayers"
+                                    variant="destructive"
+                                    size="sm"
+                                    class="ml-auto h-8 px-2"
+                                    :disabled="removeForm.processing"
+                                    @click="kickPlayer(player)"
+                                >
+                                    Удалить
+                                </Button>
                             </li>
                         </ul>
                         <p
@@ -347,9 +383,9 @@ onUnmounted(() => {
                             Пока никого нет
                         </p>
                         <Button
-                            v-if="!isJoined && nickname.trim()"
+                            v-if="!isJoined && joinForm.username.trim()"
                             class="w-full bg-red-600 text-white hover:bg-red-700"
-                            :disabled="isLoading"
+                            :disabled="joinForm.processing"
                             @click="joinTeam(2)"
                         >
                             Присоединиться к Команде 2

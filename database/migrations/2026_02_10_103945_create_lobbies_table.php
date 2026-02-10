@@ -13,7 +13,8 @@ return new class extends Migration
     {
         Schema::create('lobbies', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
+            $table->string('guest_id')->nullable();
             $table->string('title');
             $table->string('code', 6)->unique();
             $table->timestamps();
