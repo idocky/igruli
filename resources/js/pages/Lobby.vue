@@ -13,6 +13,7 @@ interface LobbyData {
     title: string;
     code: string;
     players: Player[];
+    teams: Team[];
     createdBy: string | null;
     canManagePlayers: boolean;
 }
@@ -21,6 +22,19 @@ interface Player {
     userId: string;
     username: string;
     team: number;
+}
+
+interface Team {
+    number: number;
+    name: string;
+    maxPlayers: number | null;
+    players: Player[];
+}
+
+interface GameInfo {
+    title: string;
+    team_max_size: number | null;
+    max_teams: number;
 }
 
 interface PresenceMember {
@@ -35,25 +49,47 @@ interface PlayerRemovedEvent {
 
 const props = defineProps<{
     lobby: LobbyData;
+    gameInfo: GameInfo;
     currentPlayer: Player | null;
 }>();
 
 const joinForm = useForm({
     username: '',
-    team: 1,
+    team: props.lobby.teams[0]?.number ?? 1,
 });
 
 const removeForm = useForm({
     guest_id: '',
 });
 
+const createTeamForm = useForm({});
+
 const isJoined = ref(false);
 const currentPlayer = ref<Player | null>(null);
-const team1Players = ref<Player[]>(props.lobby.players.filter((p) => p.team === 1));
-const team2Players = ref<Player[]>(props.lobby.players.filter((p) => p.team === 2));
+const teams = ref<Team[]>([]);
 const canManagePlayers = computed(() => props.lobby.canManagePlayers);
+const canAddTeam = computed(() => teams.value.length < props.gameInfo.max_teams);
 
 let echo: Echo<'reverb'> | null = null;
+
+watch(
+    () => props.lobby.teams,
+    (newTeams) => {
+        teams.value = newTeams.map((team) => {
+            const existing = teams.value.find((t) => t.number === team.number);
+
+            if (!existing) {
+                return team;
+            }
+
+            return {
+                ...team,
+                players: existing.players,
+            };
+        });
+    },
+    { immediate: true },
+);
 
 function addPlayer(member: PresenceMember): void {
     const player: Player = {
@@ -62,21 +98,21 @@ function addPlayer(member: PresenceMember): void {
         team: member.team,
     };
 
-    if (player.team === 1) {
-        if (!team1Players.value.some((p) => p.userId === player.userId)) {
-            team1Players.value.push(player);
-        }
-    } else if (player.team === 2) {
-        if (!team2Players.value.some((p) => p.userId === player.userId)) {
-            team2Players.value.push(player);
-        }
+    const team = teams.value.find((t) => t.number === player.team);
+    if (!team) {
+        return;
     }
-    console.log(1);
+
+    if (!team.players.some((p) => p.userId === player.userId)) {
+        team.players.push(player);
+    }
 }
 
 function removePlayerByUserId(userId: string): void {
-    team1Players.value = team1Players.value.filter((p) => p.userId !== userId);
-    team2Players.value = team2Players.value.filter((p) => p.userId !== userId);
+    teams.value = teams.value.map((team) => ({
+        ...team,
+        players: team.players.filter((p) => p.userId !== userId),
+    }));
 }
 
 function removePlayer(member: PresenceMember): void {
@@ -127,6 +163,16 @@ function joinTeam(team: number): void {
     joinForm.team = team;
 
     joinForm.post(`/lobby/${props.lobby.code}/join`, {
+        preserveScroll: true,
+    });
+}
+
+function createTeam(): void {
+    if (!canAddTeam.value || createTeamForm.processing) {
+        return;
+    }
+
+    createTeamForm.post(`/lobby/${props.lobby.code}/teams`, {
         preserveScroll: true,
     });
 }
@@ -205,7 +251,9 @@ onUnmounted(() => {
                     class="text-center"
                     :aria-invalid="!!joinForm.errors.username"
                     @keyup.enter="
-                        joinForm.username.trim() ? joinTeam(1) : undefined
+                        joinForm.username.trim() && teams[0]
+                            ? joinTeam(teams[0].number)
+                            : undefined
                     "
                 />
                 <p
@@ -228,37 +276,39 @@ onUnmounted(() => {
             </div>
 
             <!-- Teams -->
-            <div class="grid gap-6 md:grid-cols-2">
-                <!-- Team 1 -->
+            <div class="flex flex-wrap justify-center gap-6">
                 <Card
-                    class="border-blue-500/30 bg-blue-500/5 dark:bg-blue-500/10"
+                    v-for="team in teams"
+                    :key="team.number"
+                    class="w-full max-w-sm"
                 >
-                    <CardHeader class="border-b border-blue-500/20">
-                        <CardTitle
-                            class="flex items-center gap-2 text-xl text-blue-600 dark:text-blue-400"
-                        >
+                    <CardHeader class="border-b">
+                        <CardTitle class="flex items-center gap-2 text-xl">
                             <span
-                                class="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-sm font-bold"
+                                class="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-bold text-foreground"
                             >
-                                1
+                                {{ team.number }}
                             </span>
-                            Команда 1
+                            {{ team.name }}
                             <span
-                                class="ml-auto rounded-full bg-blue-500/20 px-2.5 py-0.5 text-xs font-medium"
+                                class="ml-auto rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-foreground"
                             >
-                                {{ team1Players.length }}
+                                {{ team.players.length
+                                }}<template v-if="team.maxPlayers !== null"
+                                    >/ {{ team.maxPlayers }}</template
+                                >
                             </span>
                         </CardTitle>
                     </CardHeader>
                     <CardContent class="min-h-[200px]">
                         <ul class="mb-4 space-y-2">
                             <li
-                                v-for="player in team1Players"
+                                v-for="player in team.players"
                                 :key="player.userId"
-                                class="flex items-center gap-2 rounded-md bg-blue-500/10 px-3 py-2 text-sm"
+                                class="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm"
                             >
                                 <span
-                                    class="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/30 text-xs font-medium text-blue-700 dark:text-blue-300"
+                                    class="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground"
                                 >
                                     {{
                                         player.username.charAt(0).toUpperCase()
@@ -267,7 +317,7 @@ onUnmounted(() => {
                                 <span
                                     class="font-medium"
                                     :class="{
-                                        'text-blue-700 dark:text-blue-300':
+                                        'text-foreground':
                                             player.userId ===
                                             currentPlayer?.userId,
                                     }"
@@ -295,101 +345,71 @@ onUnmounted(() => {
                                 </Button>
                             </li>
                         </ul>
+
                         <p
-                            v-if="team1Players.length === 0"
+                            v-if="team.players.length === 0"
                             class="py-8 text-center text-sm text-muted-foreground"
                         >
                             Пока никого нет
                         </p>
+
+                        <p
+                            v-if="joinForm.errors.team"
+                            class="mb-3 text-sm text-destructive"
+                        >
+                            {{ joinForm.errors.team }}
+                        </p>
+
                         <Button
                             v-if="!isJoined && joinForm.username.trim()"
-                            class="w-full bg-blue-600 text-white hover:bg-blue-700"
-                            :disabled="joinForm.processing"
-                            @click="joinTeam(1)"
+                            class="w-full"
+                            :disabled="
+                                joinForm.processing ||
+                                (team.maxPlayers !== null &&
+                                    team.players.length >= team.maxPlayers)
+                            "
+                            @click="joinTeam(team.number)"
                         >
-                            Присоединиться к Команде 1
+                            <template
+                                v-if="
+                                    team.maxPlayers !== null &&
+                                    team.players.length >= team.maxPlayers
+                                "
+                            >
+                                Команда заполнена
+                            </template>
+                            <template v-else>
+                                Присоединиться
+                            </template>
                         </Button>
                     </CardContent>
                 </Card>
 
-                <!-- Team 2 -->
-                <Card class="border-red-500/30 bg-red-500/5 dark:bg-red-500/10">
-                    <CardHeader class="border-b border-red-500/20">
-                        <CardTitle
-                            class="flex items-center gap-2 text-xl text-red-600 dark:text-red-400"
+                <Card
+                    v-if="canAddTeam"
+                    class="w-full max-w-sm cursor-pointer border-dashed transition-colors hover:bg-muted/40"
+                    @click="createTeam"
+                >
+                    <CardContent
+                        class="flex min-h-[280px] flex-col items-center justify-center gap-3"
+                    >
+                        <div
+                            class="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-2xl font-semibold"
                         >
-                            <span
-                                class="flex h-8 w-8 items-center justify-center rounded-full bg-red-500/20 text-sm font-bold"
-                            >
-                                2
-                            </span>
-                            Команда 2
-                            <span
-                                class="ml-auto rounded-full bg-red-500/20 px-2.5 py-0.5 text-xs font-medium"
-                            >
-                                {{ team2Players.length }}
-                            </span>
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent class="min-h-[200px]">
-                        <ul class="mb-4 space-y-2">
-                            <li
-                                v-for="player in team2Players"
-                                :key="player.userId"
-                                class="flex items-center gap-2 rounded-md bg-red-500/10 px-3 py-2 text-sm"
-                            >
-                                <span
-                                    class="flex h-6 w-6 items-center justify-center rounded-full bg-red-500/30 text-xs font-medium text-red-700 dark:text-red-300"
-                                >
-                                    {{
-                                        player.username.charAt(0).toUpperCase()
-                                    }}
-                                </span>
-                                <span
-                                    class="font-medium"
-                                    :class="{
-                                        'text-red-700 dark:text-red-300':
-                                            player.userId ===
-                                            currentPlayer?.userId,
-                                    }"
-                                >
-                                    {{ player.username }}
-                                    <span
-                                        v-if="
-                                            player.userId ===
-                                            currentPlayer?.userId
-                                        "
-                                        class="text-xs text-muted-foreground"
-                                    >
-                                        (вы)
-                                    </span>
-                                </span>
-                                <Button
-                                    v-if="canManagePlayers"
-                                    variant="destructive"
-                                    size="sm"
-                                    class="ml-auto h-8 px-2"
-                                    :disabled="removeForm.processing"
-                                    @click="kickPlayer(player)"
-                                >
-                                    Удалить
-                                </Button>
-                            </li>
-                        </ul>
+                            +
+                        </div>
+                        <div class="text-center">
+                            <p class="font-medium">Добавить команду</p>
+                            <p class="text-sm text-muted-foreground">
+                                Лимит: {{ gameInfo.max_teams }}
+                            </p>
+                        </div>
                         <p
-                            v-if="team2Players.length === 0"
-                            class="py-8 text-center text-sm text-muted-foreground"
+                            v-if="createTeamForm.errors.teams"
+                            class="text-sm text-destructive"
                         >
-                            Пока никого нет
+                            {{ createTeamForm.errors.teams }}
                         </p>
-                        <Button
-                            v-if="!isJoined && joinForm.username.trim()"
-                            class="w-full bg-red-600 text-white hover:bg-red-700"
-                            :disabled="joinForm.processing"
-                            @click="joinTeam(2)"
-                        >
-                            Присоединиться к Команде 2
-                        </Button>
                     </CardContent>
                 </Card>
             </div>

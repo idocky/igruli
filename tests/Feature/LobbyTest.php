@@ -238,3 +238,41 @@ test('non creator cannot remove players', function () {
         'guest_id' => $player->guest_id,
     ])->assertForbidden();
 });
+
+test('cannot add a new team when max teams limit is reached', function () {
+    $lobby = Lobby::query()->create([
+        'title' => 'Test Lobby',
+        'code' => Lobby::generateUniqueCode(),
+        'user_id' => null,
+        'guest_id' => null,
+    ]);
+
+    $this->post(route('lobby.teams.store', $lobby))
+        ->assertRedirect()
+        ->assertSessionHasErrors(['teams']);
+
+    $lobby->refresh();
+
+    expect($lobby->teams()->count())->toBe(1)
+        ->and($lobby->teams()->orderBy('number')->pluck('number')->all())->toBe([1]);
+});
+
+test('cannot join a team that is already full', function () {
+    $lobby = Lobby::factory()->create();
+
+    LobbyPlayer::factory()->for($lobby)->create([
+        'team' => 1,
+        'guest_id' => 'guest_already_in_team',
+    ]);
+
+    $this->post(route('lobby.join', $lobby), [
+        'username' => 'LatePlayer',
+        'team' => 1,
+    ])->assertSessionHasErrors(['team']);
+
+    expect(LobbyPlayer::query()
+        ->where('lobby_id', $lobby->id)
+        ->where('username', 'LatePlayer')
+        ->exists()
+    )->toBeFalse();
+});

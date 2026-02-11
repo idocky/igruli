@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\GamesEnum;
 use App\Events\UserRemovedFromLobby;
 use App\Http\Requests\Lobbies\LobbyCreateRequest;
 use App\Http\Requests\Lobbies\LobbyJoinRequest;
 use App\Http\Requests\Lobbies\LobbyRemovePlayerRequest;
 use App\Models\Lobby;
 use App\Models\LobbyPlayer;
+use App\Models\Team;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -15,8 +17,26 @@ use Inertia\Response;
 
 class LobbyController extends Controller
 {
+    /**
+     * @return array{title: string, team_max_size: int|null, max_teams: int}
+     */
+    private function gameInfo(): array
+    {
+        return [
+            'title' => GamesEnum::DUSHNILA->value,
+            'team_max_size' => 5,
+            'max_teams' => 1,
+        ];
+    }
+
     public function show(Request $request, Lobby $lobby): Response
     {
+        $gameInfo = $this->gameInfo();
+        $maxTeams = max(1, (int) $gameInfo['max_teams']);
+        $defaultTeamsCount = min(2, $maxTeams);
+
+        $lobby->ensureDefaultTeams(count: $defaultTeamsCount, defaultMaxPlayers: $gameInfo['team_max_size']);
+
         $players = $lobby->players()
             ->orderBy('team')
             ->orderBy('id')
@@ -36,6 +56,19 @@ class LobbyController extends Controller
                     'userId' => $userId,
                     'username' => $player->username,
                     'team' => $player->team,
+                ];
+            })
+            ->values();
+
+        $teams = $lobby->teams()
+            ->orderBy('number')
+            ->get()
+            ->map(function (Team $team) use ($players): array {
+                return [
+                    'number' => $team->number,
+                    'name' => $team->name ?? "Команда {$team->number}",
+                    'maxPlayers' => $team->max_players,
+                    'players' => $players->where('team', $team->number)->values(),
                 ];
             })
             ->values();
@@ -76,9 +109,11 @@ class LobbyController extends Controller
                 'title' => $lobby->title,
                 'code' => $lobby->code,
                 'players' => $players,
+                'teams' => $teams,
                 'createdBy' => $createdBy,
                 'canManagePlayers' => $canManagePlayers,
             ],
+            'gameInfo' => $gameInfo,
             'currentPlayer' => $currentPlayer,
         ]);
     }
@@ -99,6 +134,12 @@ class LobbyController extends Controller
             'guest_id' => $guestCreatorId,
         ]);
 
+        $gameInfo = $this->gameInfo();
+        $maxTeams = max(1, (int) $gameInfo['max_teams']);
+        $defaultTeamsCount = min(2, $maxTeams);
+
+        $lobby->ensureDefaultTeams(count: $defaultTeamsCount, defaultMaxPlayers: $gameInfo['team_max_size']);
+
         if ($guestCreatorId) {
             /** @var array<string, string> $creators */
             $creators = $request->session()->get('lobby_creators', []);
@@ -112,6 +153,18 @@ class LobbyController extends Controller
     public function join(Lobby $lobby, LobbyJoinRequest $request): RedirectResponse
     {
         $validated = $request->validated();
+
+        $team = $lobby->teams()->where('number', $validated['team'])->firstOrFail();
+
+        if ($team->max_players !== null) {
+            $playersInTeam = $lobby->players()->where('team', $team->number)->count();
+
+            if ($playersInTeam >= $team->max_players) {
+                return back()->withErrors([
+                    'team' => 'Эта команда уже заполнена',
+                ]);
+            }
+        }
 
         $userId = uniqid('guest_', true);
 
@@ -127,6 +180,32 @@ class LobbyController extends Controller
             'username' => $validated['username'],
             'team' => $validated['team'],
             'lobby_id' => $lobby->id,
+        ]);
+
+        return redirect()->route('lobby.show', $lobby);
+    }
+
+    public function storeTeam(Lobby $lobby): RedirectResponse
+    {
+        $gameInfo = $this->gameInfo();
+        $maxTeams = max(1, (int) $gameInfo['max_teams']);
+        $defaultTeamsCount = min(2, $maxTeams);
+
+        $lobby->ensureDefaultTeams(count: $defaultTeamsCount, defaultMaxPlayers: $gameInfo['team_max_size']);
+
+        $currentTeamsCount = $lobby->teams()->count();
+        if ($currentTeamsCount >= $maxTeams) {
+            return back()->withErrors([
+                'teams' => 'Достигнут лимит команд для этой игры',
+            ]);
+        }
+
+        $nextNumber = (int) $lobby->teams()->max('number') + 1;
+
+        $lobby->teams()->create([
+            'number' => $nextNumber,
+            'name' => "Команда {$nextNumber}",
+            'max_players' => $gameInfo['team_max_size'],
         ]);
 
         return redirect()->route('lobby.show', $lobby);

@@ -38,4 +38,28 @@ class Lobby extends Model
     {
         return $this->hasMany(LobbyPlayer::class, 'lobby_id');
     }
+
+    public function teams(): HasMany
+    {
+        return $this->hasMany(Team::class, 'lobby_id');
+    }
+
+    public function ensureDefaultTeams(int $count = 2, ?int $defaultMaxPlayers = null): void
+    {
+        if ($this->teams()->exists()) {
+            return;
+        }
+
+        $teams = [];
+
+        for ($i = 1; $i <= $count; $i++) {
+            $teams[] = [
+                'number' => $i,
+                'name' => "Команда {$i}",
+                'max_players' => $defaultMaxPlayers,
+            ];
+        }
+
+        $this->teams()->createMany($teams);
+    }
 }
