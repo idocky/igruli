@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { computed, onUnmounted, ref, watch } from 'vue';
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
+import IgruliLayout from '@/layouts/IgruliLayout.vue';
 
 interface LobbyData {
     id: number;
@@ -215,204 +216,177 @@ onUnmounted(() => {
 <template>
     <Head :title="`Лобби — ${lobby.title}`" />
 
-    <div
-        class="flex min-h-screen flex-col items-center bg-background p-6 lg:p-8"
-    >
-        <div class="w-full max-w-4xl">
-            <div class="mb-8 text-center">
-                <h1 class="text-3xl font-bold tracking-tight text-foreground">
-                    {{ lobby.title }}
-                </h1>
-                <div class="mt-2 flex items-center justify-center gap-2">
-                    <span class="text-sm text-muted-foreground">
-                        Код лобби:
-                    </span>
-                    <Badge variant="secondary" class="text-sm">
-                        {{ lobby.code }}
-                    </Badge>
-                </div>
-            </div>
-
-            <!-- Nickname entry -->
-            <div
-                v-if="!isJoined"
-                class="mx-auto mb-10 flex max-w-sm flex-col items-center gap-4"
-            >
-                <label
-                    for="nickname"
-                    class="text-sm font-medium text-muted-foreground"
-                >
-                    Введите ваш никнейм
-                </label>
-                <Input
-                    id="nickname"
-                    v-model="joinForm.username"
-                    placeholder="Никнейм"
-                    class="text-center"
-                    :aria-invalid="!!joinForm.errors.username"
-                    @keyup.enter="
-                        joinForm.username.trim() && teams[0]
-                            ? joinTeam(teams[0].number)
-                            : undefined
-                    "
-                />
-                <p
-                    v-if="joinForm.errors.username"
-                    class="text-sm text-destructive"
-                >
-                    {{ joinForm.errors.username }}
-                </p>
-            </div>
-
-            <!-- Joined badge -->
-            <div v-else class="mx-auto mb-10 text-center">
-                <p class="text-lg text-muted-foreground">
-                    Вы в игре как
-                    <span class="font-semibold text-foreground">{{
-                        currentPlayer?.username
-                    }}</span>
-                    — Команда {{ currentPlayer?.team }}
-                </p>
-            </div>
-
-            <!-- Teams -->
-            <div class="flex flex-wrap justify-center gap-6">
-                <Card
-                    v-for="team in teams"
-                    :key="team.number"
-                    class="w-full max-w-sm"
-                >
-                    <CardHeader class="border-b">
-                        <CardTitle class="flex items-center gap-2 text-xl">
-                            <span
-                                class="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-bold text-foreground"
-                            >
-                                {{ team.number }}
-                            </span>
-                            {{ team.name }}
-                            <span
-                                class="ml-auto rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-foreground"
-                            >
-                                {{ team.players.length
-                                }}<template v-if="team.maxPlayers !== null"
-                                    >/ {{ team.maxPlayers }}</template
-                                >
-                            </span>
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent class="min-h-[200px]">
-                        <ul class="mb-4 space-y-2">
-                            <li
-                                v-for="player in team.players"
-                                :key="player.userId"
-                                class="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm"
-                            >
-                                <span
-                                    class="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground"
-                                >
-                                    {{
-                                        player.username.charAt(0).toUpperCase()
-                                    }}
-                                </span>
-                                <span
-                                    class="font-medium"
-                                    :class="{
-                                        'text-foreground':
-                                            player.userId ===
-                                            currentPlayer?.userId,
-                                    }"
-                                >
-                                    {{ player.username }}
-                                    <span
-                                        v-if="
-                                            player.userId ===
-                                            currentPlayer?.userId
-                                        "
-                                        class="text-xs text-muted-foreground"
-                                    >
-                                        (вы)
-                                    </span>
-                                </span>
-                                <Button
-                                    v-if="canManagePlayers"
-                                    variant="destructive"
-                                    size="sm"
-                                    class="ml-auto h-8 px-2"
-                                    :disabled="removeForm.processing"
-                                    @click="kickPlayer(player)"
-                                >
-                                    Удалить
-                                </Button>
-                            </li>
-                        </ul>
-
-                        <p
-                            v-if="team.players.length === 0"
-                            class="py-8 text-center text-sm text-muted-foreground"
-                        >
-                            Пока никого нет
-                        </p>
-
-                        <p
-                            v-if="joinForm.errors.team"
-                            class="mb-3 text-sm text-destructive"
-                        >
-                            {{ joinForm.errors.team }}
-                        </p>
-
-                        <Button
-                            v-if="!isJoined && joinForm.username.trim()"
-                            class="w-full"
-                            :disabled="
-                                joinForm.processing ||
-                                (team.maxPlayers !== null &&
-                                    team.players.length >= team.maxPlayers)
-                            "
-                            @click="joinTeam(team.number)"
-                        >
-                            <template
-                                v-if="
-                                    team.maxPlayers !== null &&
-                                    team.players.length >= team.maxPlayers
-                                "
-                            >
-                                Команда заполнена
-                            </template>
-                            <template v-else>
-                                Присоединиться
-                            </template>
-                        </Button>
-                    </CardContent>
-                </Card>
-
-                <Card
-                    v-if="canAddTeam"
-                    class="w-full max-w-sm cursor-pointer border-dashed transition-colors hover:bg-muted/40"
-                    @click="createTeam"
-                >
-                    <CardContent
-                        class="flex min-h-[280px] flex-col items-center justify-center gap-3"
-                    >
-                        <div
-                            class="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-2xl font-semibold"
-                        >
-                            +
-                        </div>
-                        <div class="text-center">
-                            <p class="font-medium">Добавить команду</p>
-                            <p class="text-sm text-muted-foreground">
-                                Лимит: {{ gameInfo.max_teams }}
-                            </p>
-                        </div>
-                        <p
-                            v-if="createTeamForm.errors.teams"
-                            class="text-sm text-destructive"
-                        >
-                            {{ createTeamForm.errors.teams }}
-                        </p>
-                    </CardContent>
-                </Card>
+    <IgruliLayout>
+        <div class="mb-8 text-center">
+            <h1 class="text-3xl font-bold tracking-tight text-foreground">
+                {{ lobby.title }}
+            </h1>
+            <div class="mt-2 flex items-center justify-center gap-2">
+                <span class="text-sm text-muted-foreground">Код лобби:</span>
+                <Badge variant="secondary" class="text-sm">
+                    {{ lobby.code }}
+                </Badge>
             </div>
         </div>
-    </div>
+
+        <!-- Nickname entry -->
+        <div
+            v-if="!isJoined"
+            class="mx-auto mb-10 flex max-w-sm flex-col items-center gap-4"
+        >
+            <label for="nickname" class="text-sm font-medium text-muted-foreground">
+                Введите ваш никнейм
+            </label>
+            <Input
+                id="nickname"
+                v-model="joinForm.username"
+                placeholder="Никнейм"
+                class="text-center"
+                :aria-invalid="!!joinForm.errors.username"
+                @keyup.enter="
+                    joinForm.username.trim() && teams[0]
+                        ? joinTeam(teams[0].number)
+                        : undefined
+                "
+            />
+            <p v-if="joinForm.errors.username" class="text-sm text-destructive">
+                {{ joinForm.errors.username }}
+            </p>
+        </div>
+
+        <!-- Joined badge -->
+        <div v-else class="mx-auto mb-10 text-center">
+            <p class="text-lg text-muted-foreground">
+                Вы в игре как
+                <span class="font-semibold text-foreground">{{
+                    currentPlayer?.username
+                }}</span>
+                — Команда {{ currentPlayer?.team }}
+            </p>
+        </div>
+
+        <!-- Teams -->
+        <div class="flex flex-wrap justify-center gap-6">
+            <Card v-for="team in teams" :key="team.number" class="w-full max-w-sm">
+                <CardHeader class="border-b">
+                    <CardTitle class="flex items-center gap-2 text-xl">
+                        <span
+                            class="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-bold text-foreground"
+                        >
+                            {{ team.number }}
+                        </span>
+                        {{ team.name }}
+                        <span
+                            class="ml-auto rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-foreground"
+                        >
+                            {{ team.players.length
+                            }}<template v-if="team.maxPlayers !== null"
+                                >/ {{ team.maxPlayers }}</template
+                            >
+                        </span>
+                    </CardTitle>
+                </CardHeader>
+                <CardContent class="min-h-[200px]">
+                    <ul class="mb-4 space-y-2">
+                        <li
+                            v-for="player in team.players"
+                            :key="player.userId"
+                            class="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm"
+                        >
+                            <span
+                                class="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground"
+                            >
+                                {{ player.username.charAt(0).toUpperCase() }}
+                            </span>
+                            <span
+                                class="font-medium"
+                                :class="{
+                                    'text-foreground':
+                                        player.userId === currentPlayer?.userId,
+                                }"
+                            >
+                                {{ player.username }}
+                                <span
+                                    v-if="player.userId === currentPlayer?.userId"
+                                    class="text-xs text-muted-foreground"
+                                >
+                                    (вы)
+                                </span>
+                            </span>
+                            <Button
+                                v-if="canManagePlayers"
+                                variant="destructive"
+                                size="sm"
+                                class="ml-auto h-8 px-2"
+                                :disabled="removeForm.processing"
+                                @click="kickPlayer(player)"
+                            >
+                                Удалить
+                            </Button>
+                        </li>
+                    </ul>
+
+                    <p
+                        v-if="team.players.length === 0"
+                        class="py-8 text-center text-sm text-muted-foreground"
+                    >
+                        Пока никого нет
+                    </p>
+
+                    <p v-if="joinForm.errors.team" class="mb-3 text-sm text-destructive">
+                        {{ joinForm.errors.team }}
+                    </p>
+
+                    <Button
+                        v-if="!isJoined && joinForm.username.trim()"
+                        class="w-full"
+                        :disabled="
+                            joinForm.processing ||
+                            (team.maxPlayers !== null &&
+                                team.players.length >= team.maxPlayers)
+                        "
+                        @click="joinTeam(team.number)"
+                    >
+                        <template
+                            v-if="
+                                team.maxPlayers !== null &&
+                                team.players.length >= team.maxPlayers
+                            "
+                        >
+                            Команда заполнена
+                        </template>
+                        <template v-else> Присоединиться </template>
+                    </Button>
+                </CardContent>
+            </Card>
+
+            <Card
+                v-if="canAddTeam"
+                class="w-full max-w-sm cursor-pointer border-dashed transition-colors hover:bg-muted/40"
+                @click="createTeam"
+            >
+                <CardContent
+                    class="flex min-h-[280px] flex-col items-center justify-center gap-3"
+                >
+                    <div
+                        class="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-2xl font-semibold"
+                    >
+                        +
+                    </div>
+                    <div class="text-center">
+                        <p class="font-medium">Добавить команду</p>
+                        <p class="text-sm text-muted-foreground">
+                            Лимит: {{ gameInfo.max_teams }}
+                        </p>
+                    </div>
+                    <p
+                        v-if="createTeamForm.errors.teams"
+                        class="text-sm text-destructive"
+                    >
+                        {{ createTeamForm.errors.teams }}
+                    </p>
+                </CardContent>
+            </Card>
+        </div>
+    </IgruliLayout>
 </template>

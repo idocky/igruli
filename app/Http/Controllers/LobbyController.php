@@ -84,6 +84,19 @@ class LobbyController extends Controller
                 'username' => $guest['username'],
                 'team' => $guest['team'],
             ];
+        } elseif ($request->user()) {
+            $player = LobbyPlayer::query()
+                ->where('lobby_id', $lobby->id)
+                ->where('user_id', $request->user()->getAuthIdentifier())
+                ->first();
+
+            if ($player) {
+                $currentPlayer = [
+                    'userId' => $player->guest_id ?: (string) $player->user_id,
+                    'username' => $player->username,
+                    'team' => $player->team,
+                ];
+            }
         }
 
         $createdBy = null;
@@ -156,8 +169,19 @@ class LobbyController extends Controller
 
         $team = $lobby->teams()->where('number', $validated['team'])->firstOrFail();
 
+        $existingPlayer = null;
+        if ($request->user()) {
+            $existingPlayer = LobbyPlayer::query()
+                ->where('lobby_id', $lobby->id)
+                ->where('user_id', $request->user()->getAuthIdentifier())
+                ->first();
+        }
+
         if ($team->max_players !== null) {
-            $playersInTeam = $lobby->players()->where('team', $team->number)->count();
+            $playersInTeam = $lobby->players()
+                ->where('team', $team->number)
+                ->when($existingPlayer, fn ($query) => $query->whereKeyNot($existingPlayer->id))
+                ->count();
 
             if ($playersInTeam >= $team->max_players) {
                 return back()->withErrors([
@@ -166,21 +190,37 @@ class LobbyController extends Controller
             }
         }
 
-        $userId = uniqid('guest_', true);
+        if ($request->user()) {
+            $guestId = 'user_'.$request->user()->getAuthIdentifier();
 
-        $request->session()->put('lobby_guest', [
-            'user_id' => $userId,
-            'username' => $validated['username'],
-            'team' => $validated['team'],
-            'lobby_code' => $lobby->code,
-        ]);
+            LobbyPlayer::query()->updateOrCreate(
+                [
+                    'lobby_id' => $lobby->id,
+                    'user_id' => $request->user()->getAuthIdentifier(),
+                ],
+                [
+                    'guest_id' => $guestId,
+                    'username' => $validated['username'],
+                    'team' => $validated['team'],
+                ],
+            );
+        } else {
+            $userId = uniqid('guest_', true);
 
-        LobbyPlayer::create([
-            'guest_id' => $userId,
-            'username' => $validated['username'],
-            'team' => $validated['team'],
-            'lobby_id' => $lobby->id,
-        ]);
+            $request->session()->put('lobby_guest', [
+                'user_id' => $userId,
+                'username' => $validated['username'],
+                'team' => $validated['team'],
+                'lobby_code' => $lobby->code,
+            ]);
+
+            LobbyPlayer::create([
+                'guest_id' => $userId,
+                'username' => $validated['username'],
+                'team' => $validated['team'],
+                'lobby_id' => $lobby->id,
+            ]);
+        }
 
         return redirect()->route('lobby.show', $lobby);
     }
