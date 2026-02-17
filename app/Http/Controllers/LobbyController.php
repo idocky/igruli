@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Enums\GamesEnum;
+use App\Events\LobbyRosterUpdated;
+use App\Events\LobbyStarted;
 use App\Events\UserRemovedFromLobby;
 use App\Http\Requests\Lobbies\LobbyCreateRequest;
 use App\Http\Requests\Lobbies\LobbyJoinRequest;
@@ -12,6 +14,7 @@ use App\Models\LobbyPlayer;
 use App\Models\Team;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -27,6 +30,44 @@ class LobbyController extends Controller
             'team_max_size' => 5,
             'max_teams' => 1,
         ];
+    }
+
+    /**
+     * @return array<int, array{userId: string, username: string, team: int}>
+     */
+    private function rosterPlayers(Lobby $lobby): array
+    {
+        return $lobby->players()
+            ->orderBy('team')
+            ->orderBy('id')
+            ->get()
+            ->map(function (LobbyPlayer $player): array {
+                $userId = $player->guest_id;
+
+                if (! $userId && $player->user_id) {
+                    $userId = (string) $player->user_id;
+                }
+
+                if (! $userId) {
+                    $userId = (string) $player->id;
+                }
+
+                return [
+                    'userId' => $userId,
+                    'username' => $player->username,
+                    'team' => $player->team,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function broadcastRoster(Lobby $lobby): void
+    {
+        broadcast(new LobbyRosterUpdated(
+            lobbyCode: $lobby->code,
+            players: $this->rosterPlayers($lobby),
+        ));
     }
 
     public function show(Request $request, Lobby $lobby): Response
@@ -125,6 +166,8 @@ class LobbyController extends Controller
                 'teams' => $teams,
                 'createdBy' => $createdBy,
                 'canManagePlayers' => $canManagePlayers,
+                'game' => $lobby->game ?? GamesEnum::DUSHNILA->value,
+                'startedAt' => $lobby->started_at,
             ],
             'gameInfo' => $gameInfo,
             'currentPlayer' => $currentPlayer,
@@ -204,6 +247,8 @@ class LobbyController extends Controller
                     'team' => $validated['team'],
                 ],
             );
+
+            $this->broadcastRoster($lobby);
         } else {
             $userId = uniqid('guest_', true);
 
@@ -220,6 +265,8 @@ class LobbyController extends Controller
                 'team' => $validated['team'],
                 'lobby_id' => $lobby->id,
             ]);
+
+            $this->broadcastRoster($lobby);
         }
 
         return redirect()->route('lobby.show', $lobby);
@@ -279,10 +326,49 @@ class LobbyController extends Controller
             lobbyCode: $lobby->code,
         ));
 
+        $this->broadcastRoster($lobby);
+
         $guest = $request->session()->get('lobby_guest');
         if ($guest && $guest['lobby_code'] === $lobby->code && $guest['user_id'] === $playerToRemove->guest_id) {
             $request->session()->forget('lobby_guest');
         }
+
+        return redirect()->route('lobby.show', $lobby);
+    }
+
+    public function start(Request $request, Lobby $lobby): RedirectResponse
+    {
+        $canManagePlayers = false;
+
+        if ($lobby->user_id && $request->user() && (int) $request->user()->getAuthIdentifier() === (int) $lobby->user_id) {
+            $canManagePlayers = true;
+        } elseif ($lobby->guest_id) {
+            /** @var array<string, string> $creators */
+            $creators = $request->session()->get('lobby_creators', []);
+            $canManagePlayers = ($creators[$lobby->code] ?? null) === $lobby->guest_id;
+        }
+
+        abort_unless($canManagePlayers, 403);
+
+        $game = $lobby->game ?? GamesEnum::DUSHNILA->value;
+
+        if (! $lobby->started_at) {
+            $lobby->forceFill([
+                'game' => $game,
+                'started_at' => Carbon::now(),
+            ])->save();
+        }
+
+        $url = route('lobby.games.show', [
+            'lobby' => $lobby,
+            'game' => $game,
+        ]);
+
+        broadcast(new LobbyStarted(
+            lobbyCode: $lobby->code,
+            game: $game,
+            url: $url,
+        ));
 
         return redirect()->route('lobby.show', $lobby);
     }

@@ -23,7 +23,21 @@ class Lobby extends Model
         'code',
         'user_id',
         'guest_id',
+        'game',
+        'started_at',
     ];
+
+    /**
+     * Get the attributes that should be cast.
+     *
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'started_at' => 'datetime',
+        ];
+    }
 
     public static function generateUniqueCode(): string
     {

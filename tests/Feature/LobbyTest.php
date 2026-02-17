@@ -1,8 +1,11 @@
 <?php
 
+use App\Events\LobbyRosterUpdated;
+use App\Events\LobbyStarted;
 use App\Events\UserRemovedFromLobby;
 use App\Models\Lobby;
 use App\Models\LobbyPlayer;
+use App\Models\User;
 use Illuminate\Support\Facades\Event;
 
 test('dashboard page renders successfully', function () {
@@ -108,6 +111,8 @@ test('lobby code is unique', function () {
 });
 
 test('user can join a team in a lobby', function () {
+    Event::fake([LobbyRosterUpdated::class]);
+
     $lobby = Lobby::factory()->create();
 
     $response = $this->post(route('lobby.join', $lobby), [
@@ -123,6 +128,8 @@ test('user can join a team in a lobby', function () {
         ->where('team', 1)
         ->exists()
     )->toBeTrue();
+
+    Event::assertDispatched(LobbyRosterUpdated::class);
 });
 
 test('join stores guest info in session', function () {
@@ -222,6 +229,85 @@ test('lobby creator can remove a player and broadcasts an event', function () {
     Event::assertDispatched(UserRemovedFromLobby::class, function (UserRemovedFromLobby $event) use ($player, $lobby) {
         return $event->userId === $player->guest_id && $event->lobbyCode === $lobby->code;
     });
+});
+
+test('authenticated user can join a lobby and becomes currentPlayer', function () {
+    $user = User::factory()->create();
+    $lobby = Lobby::factory()->create();
+
+    $this->actingAs($user)
+        ->post(route('lobby.join', $lobby), [
+            'username' => 'AuthPlayer',
+            'team' => 1,
+        ])
+        ->assertRedirect(route('lobby.show', $lobby));
+
+    expect(LobbyPlayer::query()
+        ->where('lobby_id', $lobby->id)
+        ->where('user_id', $user->id)
+        ->where('username', 'AuthPlayer')
+        ->exists()
+    )->toBeTrue();
+
+    $this->actingAs($user)
+        ->get(route('lobby.show', $lobby))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('Lobby')
+            ->where('currentPlayer', [
+                'userId' => 'user_'.$user->id,
+                'username' => 'AuthPlayer',
+                'team' => 1,
+            ])
+        );
+});
+
+test('lobby creator can start and broadcasts LobbyStarted', function () {
+    Event::fake([LobbyStarted::class]);
+
+    $this->post(route('lobby.store'), [
+        'title' => 'My Lobby',
+    ])->assertRedirect();
+
+    $lobby = Lobby::query()->firstOrFail();
+
+    $this->post(route('lobby.start', $lobby))
+        ->assertRedirect(route('lobby.show', $lobby));
+
+    $lobby->refresh();
+
+    expect($lobby->started_at)->not->toBeNull()
+        ->and($lobby->game)->toBe('dushnila');
+
+    Event::assertDispatched(LobbyStarted::class, function (LobbyStarted $event) use ($lobby) {
+        return $event->lobbyCode === $lobby->code
+            && $event->game === 'dushnila'
+            && str_contains($event->url, "/lobby/{$lobby->code}/games/dushnila");
+    });
+});
+
+test('non creator cannot start lobby', function () {
+    $lobby = Lobby::factory()->create([
+        'guest_id' => 'creator_guest_id',
+        'user_id' => null,
+    ]);
+
+    $this->post(route('lobby.start', $lobby))->assertForbidden();
+});
+
+test('game page renders successfully', function () {
+    $lobby = Lobby::factory()->create();
+
+    $this->get(route('lobby.games.show', [
+        'lobby' => $lobby,
+        'game' => 'dushnila',
+    ]))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('games/Dushnila')
+            ->where('lobby.code', $lobby->code)
+            ->where('game', 'dushnila')
+        );
 });
 
 test('non creator cannot remove players', function () {

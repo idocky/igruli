@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, useForm } from '@inertiajs/vue3';
+import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,6 +8,10 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 import IgruliLayout from '@/layouts/IgruliLayout.vue';
+import { join, start } from '@/routes/lobby';
+import { store } from '@/routes/lobby/teams';
+import { destroy } from '@/routes/lobby/players';
+import { show as showGame } from '@/routes/lobby/games';
 
 interface LobbyData {
     id: number;
@@ -17,6 +21,8 @@ interface LobbyData {
     teams: Team[];
     createdBy: string | null;
     canManagePlayers: boolean;
+    game: string;
+    startedAt: string | null;
 }
 
 interface Player {
@@ -48,14 +54,26 @@ interface PlayerRemovedEvent {
     userId: string;
 }
 
+interface LobbyStartedEvent {
+    game: string;
+    url: string;
+}
+
+// interface AuthUser {
+//     user: {
+//         name: string;
+//     }
+// }
+
 const props = defineProps<{
     lobby: LobbyData;
     gameInfo: GameInfo;
     currentPlayer: Player | null;
+    auth: object;
 }>();
 
 const joinForm = useForm({
-    username: '',
+    username: props.auth.user.name ?? '',
     team: props.lobby.teams[0]?.number ?? 1,
 });
 
@@ -64,12 +82,16 @@ const removeForm = useForm({
 });
 
 const createTeamForm = useForm({});
+const startForm = useForm({});
 
 const isJoined = ref(false);
 const currentPlayer = ref<Player | null>(null);
 const teams = ref<Team[]>([]);
 const canManagePlayers = computed(() => props.lobby.canManagePlayers);
 const canAddTeam = computed(() => teams.value.length < props.gameInfo.max_teams);
+const gameUrl = computed(() =>
+    showGame({ lobby: props.lobby.code, game: props.lobby.game }),
+);
 
 let echo: Echo<'reverb'> | null = null;
 
@@ -145,6 +167,13 @@ function subscribePresence(): void {
         })
         .listen('.lobby.player-removed', (event: PlayerRemovedEvent) => {
             removePlayerByUserId(event.userId);
+        })
+        .listen('.lobby.started', (event: LobbyStartedEvent) => {
+            if (!isJoined.value) {
+                return;
+            }
+
+            router.visit(event.url);
         });
 }
 
@@ -163,7 +192,7 @@ function joinTeam(team: number): void {
 
     joinForm.team = team;
 
-    joinForm.post(`/lobby/${props.lobby.code}/join`, {
+    joinForm.post(join({ code: props.lobby.code }), {
         preserveScroll: true,
     });
 }
@@ -173,7 +202,7 @@ function createTeam(): void {
         return;
     }
 
-    createTeamForm.post(`/lobby/${props.lobby.code}/teams`, {
+    createTeamForm.post(store({ code: props.lobby.code }), {
         preserveScroll: true,
     });
 }
@@ -186,10 +215,25 @@ function kickPlayer(player: Player): void {
     removePlayerByUserId(player.userId);
     removeForm.guest_id = player.userId;
 
-    removeForm.delete(`/lobby/${props.lobby.code}/players`, {
+    removeForm.delete(destroy({ code: props.lobby.code }), {
         preserveScroll: true,
         onFinish: () => {
             removeForm.reset();
+        },
+    });
+}
+
+function startLobby(): void {
+    if (!canManagePlayers.value || startForm.processing || props.lobby.startedAt) {
+        return;
+    }
+
+    startForm.post(start({ code: props.lobby.code }), {
+        preserveScroll: true,
+        onSuccess: () => {
+            if (isJoined.value) {
+                router.visit(gameUrl.value);
+            }
         },
     });
 }
@@ -217,6 +261,19 @@ onUnmounted(() => {
     <Head :title="`Лобби — ${lobby.title}`" />
 
     <IgruliLayout>
+        <div
+            v-if="lobby.startedAt"
+            class="mx-auto mb-8 flex max-w-2xl items-center justify-between gap-4 rounded-lg border bg-muted/40 px-4 py-3"
+        >
+            <div class="text-sm">
+                <p class="font-medium text-foreground">Лобби уже запущено</p>
+                <p class="text-muted-foreground">Игра: {{ lobby.game }}</p>
+            </div>
+            <Link :href="gameUrl">
+                <Button>Перейти в игру</Button>
+            </Link>
+        </div>
+
         <div class="mb-8 text-center">
             <h1 class="text-3xl font-bold tracking-tight text-foreground">
                 {{ lobby.title }}
@@ -226,6 +283,15 @@ onUnmounted(() => {
                 <Badge variant="secondary" class="text-sm">
                     {{ lobby.code }}
                 </Badge>
+            </div>
+
+            <div
+                v-if="canManagePlayers && isJoined && !lobby.startedAt"
+                class="mt-6 flex justify-center"
+            >
+                <Button :disabled="startForm.processing" @click="startLobby">
+                    Начать
+                </Button>
             </div>
         </div>
 
